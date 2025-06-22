@@ -323,9 +323,9 @@ function dsda_output_file_page()
                         <a href="<?php echo esc_attr(dsda_build_download_link($file)); ?> ">
                             <?php echo esc_html($file); ?>
                         </a>
-                    <?php } ?>
-                </td>
-            </tr>
+                    </td>
+                </tr>
+            <?php } ?>
         </table>
     </div>
     <?php
