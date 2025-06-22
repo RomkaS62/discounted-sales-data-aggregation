@@ -99,9 +99,9 @@ function dsda_export_discounted_sales_data(): void
 
             if (!array_key_exists($billing_email, $customers)) {
                 $customers[$billing_email] = [
-                    'first_name' => $order->get_billing_first_name(),
-                    'last_name' => $order->get_billing_last_name(),
-                    'email' => $order->get_billing_email(),
+                    'first_name'    => $order->get_billing_first_name(),
+                    'last_name'     => $order->get_billing_last_name(),
+                    'email'         => $order->get_billing_email(),
                     'billing_phone' => $order->get_billing_phone()
                 ];
             }
@@ -266,7 +266,8 @@ function dsda_checked(bool $val): string
     return '';
 }
 
-function dsda_settings_page() {
+function dsda_settings_page()
+{
     ?>
     <div class="wrap">
         <h1>DSDA Settings</h1>
