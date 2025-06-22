@@ -24,60 +24,68 @@ require __DIR__ . '/vendor/autoload.php';
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
-const ISO_DATE_FORMAT = 'Y-m-d';
-const ISO_TIMESTAMP_FORMAT = 'Y-m-d H:i:s';
+add_action('admin_init', function() {
+    register_setting('dsda_settings_group', 'dsda_debug');
+    register_setting('dsda_settings_group', 'dsda_output_dir');
 
-add_action('woocommerce_init', 'dsda_init');
+    add_settings_section('dsda_section', 'General', null, 'dsda-settings');
 
-function dsda_init()
-{
-    add_action(
-        'dsda_export_discounted_sales_data_hook',
-        'dsda_export_discounted_sales_data'
-    );
+    dsda_add_bool_settings_field('dsda_debug', 'Debug mode');
+    dsda_add_string_settings_field('dsda_output_dir', 'Path to output directory');
+});
 
-    if (dsda_debug()) {
-        add_filter('cron_schedules', 'dsda_define_wp_cron_schedules');
-    }
+add_action('woocommerce_init', function () {
+    add_action('admin_menu', function() {
+        add_options_page('DSDA Settings', 'DSDA Settings',
+            'manage_options', 'dsda-settings', 'dsda_settings_page');
 
-    $scheduled_time = wp_next_scheduled('dsda_export_discounted_sales_data_hook');
+        add_menu_page('Discounted sales data aggregation files', 'DSDA files',
+            'export', 'dsda-output-files', 'dsda_output_file_page',
+            null, 65);
+    });
+
+    $export_hook = 'dsda_export_discounted_sales_data_hook';
+
+    add_action($export_hook, function () {
+        $date_completed = dsda_yesterday_datetime_str();
+
+        if (dsda_debug())
+            $date_completed = '1984-01-01...2077-01-01';
+
+        dsda_export_discounted_sales_data($date_completed);
+    });
+
+    $scheduled_time = wp_next_scheduled($export_hook);
     $expected_execution_time = dsda_tomorrow_timestamp() + 600;
 
-    if (dsda_force_run()) {
-        wp_unschedule_event($scheduled_time, 'dsda_export_discounted_sales_data_hook');
-        update_option('dsda_force', false);
-        $expected_execution_time = time();
-    }
-
     if ($scheduled_time != $expected_execution_time) {
-        dsda_debug_log("Scheduling event for " . date(ISO_TIMESTAMP_FORMAT, $expected_execution_time));
-        wp_schedule_event($expected_execution_time, 'daily', 'dsda_export_discounted_sales_data_hook');
+        $formatted_time = dsda_format_datetime($expected_execution_time);
+        dsda_debug_log("Scheduling event for " . $formatted_time);
+        wp_schedule_event($expected_execution_time, 'daily', $export_hook);
     } else {
-        $formatted_time = date(ISO_TIMESTAMP_FORMAT, $scheduled_time);
+        $formatted_time = dsda_format_datetime($scheduled_time);
         dsda_debug_log("Event already scheduled for $formatted_time.");
     }
-}
+});
 
-function dsda_define_wp_cron_schedules($schedules)
+add_action('admin_post_dsda_force_execution', function () {
+    $has_nonce = check_admin_referer('dsda_force_execution_nonce');
+
+    if (!current_user_can('manage_options') || !$has_nonce)
+        wp_die(__('Unauthorized'));
+
+    if (!isset($_POST['date_completed']))
+        wp_die(__('Date missing!'));
+
+    $date_completed = $_POST['date_completed'];
+
+    dsda_export_discounted_sales_data($_POST['date_completed']);
+    wp_redirect(admin_url('admin.php?page=dsda-output-files'));
+    exit;
+});
+
+function dsda_export_discounted_sales_data(string $date_completed): void
 {
-    $schedules['once_a_second'] = array(
-        'interval' => 1,
-        'display' => __('Once every second')
-    );
-
-    return $schedules;
-}
-
-function dsda_export_discounted_sales_data(): void
-{
-    dsda_debug_log("Running job");
-
-    $date_completed = date(ISO_DATE_FORMAT, strtotime("-1 days"));
-
-    if (dsda_debug()) {
-        $date_completed = '1984-01-01...2077-01-01';
-    }
-
     dsda_debug_log("Getting orders ($date_completed)");
     $orders = wc_get_orders([
         'date_completed' => $date_completed,
@@ -181,8 +189,9 @@ function dsda_export_discounted_sales_data(): void
         ['key' => 'number_sold_under_discount', 'name' => 'Number sold under discount']
     ]);
 
-    $output_dir = get_option('dsda_output_dir');
-    $output_path = ABSPATH . "$output_dir/$date_completed.xlsx";
+    $output_dir = dsda_output_dir();
+    dsda_debug_log("DSDA output dir: $output_dir");
+    $output_path = dsda_canonicalize_path("$output_dir/$date_completed.xlsx");
     dsda_debug_log("Writing data to file: $output_path");
 
     $writer = new Xlsx($spreadsheet);
@@ -210,36 +219,25 @@ function dsda_to_xlsx(Worksheet $sheet, array $data, array $spec): void
     }
 }
 
-function dsda_debug_log(string $str): void
-{
-    if (dsda_debug())
-        error_log($str);
-}
+add_action('admin_post_dsda_download_file', function () {
+    if (!current_user_can('manage_options'))
+        wp_die(__('Unauthorized', 'textdomain'));
 
-function dsda_debug(): bool
-{
-    return get_option('dsda_debug');
-}
+    if (!isset($_GET['file']))
+        wp_die(__('No file specified'));
 
-function dsda_force_run(): bool
-{
-    return get_option('dsda_force');
-}
+    $file = basename($_GET['file']);
+    $path = dsda_output_dir() . '/' . $file;
 
-add_action('admin_menu', function() {
-    add_options_page('DSDA Settings', 'DSDA Settings', 'manage_options', 'dsda-settings', 'dsda_settings_page');
-});
+    if (!file_exists($path))
+        wp_die(__("File does not exist!"));
 
-add_action('admin_init', function() {
-    register_setting('dsda_settings_group', 'dsda_debug');
-    register_setting('dsda_settings_group', 'dsda_force');
-    register_setting('dsda_settings_group', 'dsda_output_dir');
-
-    add_settings_section('dsda_section', 'General', null, 'dsda-settings');
-
-    dsda_add_bool_settings_field('dsda_debug', 'Debug mode');
-    dsda_add_bool_settings_field('dsda_force', 'Force execution');
-    dsda_add_string_settings_field('dsda_output_dir', 'Path to output directory');
+    header("Content-Description: File Transfer");
+    header("Content-Type: application/octet-stream");
+    header("Content-Disposition: filename=\"$file\"");
+    header("Content-Length: " . filesize($path));
+    flush();
+    readfile($path);
 });
 
 function dsda_add_bool_settings_field(string $name, string $description): void
@@ -282,8 +280,145 @@ function dsda_settings_page()
     <?php
 }
 
-function dsda_tomorrow_timestamp()
+function dsda_tomorrow_timestamp(): int
 {
     $DAY_IN_SECONDS = 24 * 60 * 60;
     return floor(strtotime("+1 days") / $DAY_IN_SECONDS) * $DAY_IN_SECONDS;
+}
+
+function dsda_output_file_page()
+{
+    if (!current_user_can('manage_options'))
+        wp_die("You are not welcome here.");
+
+    $force_execution_link = dsda_build_force_execution_link();
+
+    ?>
+    <div class="wrap">
+        <h1>Discounted sales data aggregation files</h1>
+        <p>Output path: <?php echo dsda_output_dir(); ?></p>
+
+        <h2>Force execution</h2>
+
+        <form method="post" action="<?php echo esc_attr($force_execution_link); ?>">
+            <input type="hidden" name="action" value="dsda_force_execution"/>
+            <?php wp_nonce_field('dsda_force_execution_nonce'); ?>
+
+            <div>
+                <p>Date completed: </p>
+                <input type="input" name="date_completed" value="<?php
+                    echo dsda_yesterday_datetime_str(); ?>"/>
+            </div>
+            <div>
+                <button type="submit" class="button button-primary"> Force execution </button>
+            </div>
+        </form>
+
+        <h2>Existing files</h2>
+
+        <table>
+            <?php foreach (dsda_get_output_dir_files() as $file) { ?>
+                <tr>
+                    <td>
+                        <a href="<?php echo esc_attr(dsda_build_download_link($file)); ?> ">
+                            <?php echo esc_html($file); ?>
+                        </a>
+                    <?php } ?>
+                </td>
+            </tr>
+        </table>
+    </div>
+    <?php
+}
+
+function dsda_build_force_execution_link(): string
+{
+    $url_base = admin_url('admin-post.php');
+    $query = http_build_query([
+        'action' => 'dsda_force_execution'
+    ]);
+
+    return "$url_base?$query";
+}
+
+function dsda_build_download_link(string $file): string
+{
+    $url_base = admin_url('admin-post.php');
+    $query = http_build_query([
+        'action' => 'dsda_download_file',
+        'file' => $file
+    ]);
+
+    return "$url_base?$query";
+}
+
+function dsda_get_output_dir_files() : array
+{
+    $MODE_FILE_MASK = 0100000;
+
+    $output_dir = dsda_output_dir();
+    $dir = dir($output_dir);
+
+    if ($dir === false) {
+        dsda_debug_log('No such directory!');
+        return [];
+    }
+
+    try {
+        $files = [];
+
+        while (($entry = $dir->read()) !== false) {
+            $full_path = realpath("$output_dir/$entry");
+            $file_info = stat($full_path);
+            $is_regular_file = $file_info['mode'] & $MODE_FILE_MASK;
+
+            if ($is_regular_file)
+                $files[] = $entry;
+        }
+
+        return $files;
+    } finally {
+        $dir->close();
+    }
+}
+
+function dsda_debug_log(string $str): void
+{
+    if (dsda_debug())
+        error_log($str);
+}
+
+function dsda_debug(): bool
+{
+    return get_option('dsda_debug');
+}
+
+function dsda_output_dir() : string
+{
+    return wp_upload_dir()['basedir'] . '/admin-files/' . get_option('dsda_output_dir');
+}
+
+function dsda_yesterday_datetime_str(): string
+{
+    return dsda_format_date(strtotime("-1 days"));
+}
+
+const DSDA_ISO_DATE_FORMAT = 'Y-m-d';
+const DSDA_ISO_TIMESTAMP_FORMAT = 'Y-m-d H:i:s';
+
+function dsda_format_datetime(int $timestamp): string
+{
+    return date(DSDA_ISO_TIMESTAMP_FORMAT, $timestamp);
+}
+
+function dsda_format_date(int $timestamp): string
+{
+    return date(DSDA_ISO_DATE_FORMAT, $timestamp);
+}
+
+function dsda_canonicalize_path(string $path): string
+{
+    $path = str_replace('/./', '/', $path);
+    $path = preg_replace('/\/+/', '/', $path);
+    return $path;
 }
