@@ -36,7 +36,7 @@ add_action('admin_init', function() {
 
 add_action('woocommerce_init', function () {
     add_action('admin_menu', function() {
-        add_options_page('DSDA Settings', 'DSDA Settings',
+        add_options_page('DSDA Settings', 'DSDA',
             'manage_options', 'dsda-settings', 'dsda_settings_page');
 
         add_menu_page('Discounted sales data aggregation files', 'DSDA files',
