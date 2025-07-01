@@ -317,7 +317,11 @@ function dsda_output_file_page()
         <h2>Existing files</h2>
 
         <table>
-            <?php foreach (dsda_get_output_dir_files() as $file) { ?>
+            <?php
+                $files = dsda_get_output_dir_files();
+                usort($files, function ($a, $b) { return -($a <=> $b); });
+
+                foreach ($files as $file) { ?>
                 <tr>
                     <td>
                         <a href="<?php echo esc_attr(dsda_build_download_link($file)); ?> ">
